@@ -26,14 +26,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # Groq'dagi eng barqaror va o'zgarmas model ID: mixtral-8x7b-32768
+        # Hozirda Groq tizimidagi eng yangi va barqaror model: llama-3.3-70b-versatile
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": update.message.text}],
-            model="mixtral-8x7b-32768",
+            model="llama-3.3-70b-versatile",
         )
-        await update.message.reply_text(chat_completion.choices[0].message.content)
+        if chat_completion.choices:
+            response = chat_completion.choices[0].message.content
+            await update.message.reply_text(response)
     except Exception as e:
-        await update.message.reply_text(f"Xatolik: {e}")
+        await update.message.reply_text(f"Xatolik: {str(e)}")
 
 def main():
     threading.Thread(target=run_health_check_server, daemon=True).start()

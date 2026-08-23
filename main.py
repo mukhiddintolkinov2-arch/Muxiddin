@@ -1,9 +1,3 @@
-# requirements:
-# python-telegram-bot==20.7
-# aiohttp>=3.9
-# python-dotenv>=1.0
-# groq>=0.5.0
-
 import os
 import asyncio
 import logging
@@ -25,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
-
 if not GROQ_KEY or not TELEGRAM_TOKEN:
     raise RuntimeError("GROQ_API_KEY yoki BOT_TOKEN topilmadi")
 
@@ -59,11 +52,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    chat_id = update.effective_chat.id
-    user_text = update.message.text
+    cid = update.effective_chat.id
+    text = update.message.text
 
-    if chat_id not in chat_histories:
-        chat_histories[chat_id] = [{
+    if cid not in chat_histories:
+        chat_histories[cid] = [{
             "role": "system",
             "content": (
                 "Sizning ismingiz Muxiddin AI. Siz har doim faqat o‘zbek tilida, "
@@ -71,23 +64,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
         }]
 
-    chat_histories[chat_id].append({"role": "user", "content": user_text})
-
-    while len(chat_histories[chat_id]) > 12:
-        chat_histories[chat_id].pop(1)
+    chat_histories[cid].append({"role": "user", "content": text})
+    while len(chat_histories[cid]) > 12:
+        chat_histories[cid].pop(1)
 
     try:
-        reply = await ask_groq(chat_histories[chat_id])
+        reply = await ask_groq(chat_histories[cid])
     except Exception:
         reply = await ask_groq(
             [
                 {"role": "system", "content": "Faqat o‘zbek tilida javob ber."},
-                {"role": "user", "content": user_text},
+                {"role": "user", "content": text},
             ],
             model="llama3-8b-8192",
         )
 
-    chat_histories[chat_id].append({"role": "assistant", "content": reply})
+    chat_histories[cid].append({"role": "assistant", "content": reply})
     await update.message.reply_text(reply)
 
 async def start_bot():

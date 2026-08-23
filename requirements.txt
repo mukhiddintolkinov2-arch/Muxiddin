@@ -1,2 +1,4 @@
-python-telegram-bot
-groq
+python-telegram-bot==20.7
+aiohttp==3.9.5
+python-dotenv==1.0.1
+groq==0.5.0

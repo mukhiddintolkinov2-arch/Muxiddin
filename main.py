@@ -26,10 +26,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # Hozirda Groq tizimidagi eng barqaror model: llama-3.1-8b-instant
+        # Groq'dagi eng barqaror va o'zgarmas model ID: mixtral-8x7b-32768
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": update.message.text}],
-            model="llama-3.1-8b-instant",
+            model="mixtral-8x7b-32768",
         )
         await update.message.reply_text(chat_completion.choices[0].message.content)
     except Exception as e:

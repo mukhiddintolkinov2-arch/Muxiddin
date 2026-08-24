@@ -30,7 +30,7 @@ def start_message(message):
 def handle_message(message):
     try:
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="gemma2-9b-it",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": message.text}

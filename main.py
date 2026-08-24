@@ -1,98 +1,159 @@
+```python
 import os
+import sqlite3
 import asyncio
 import logging
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-import aiohttp
-from dotenv import load_dotenv
+from flask import Flask, request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import Application, MessageHandler, ContextTypes, filters
+from groq import Groq
 
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
-GROQ_KEY = os.getenv("GROQ_API_KEY")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not GROQ_KEY or not BOT_TOKEN:
-    raise RuntimeError("GROQ_API_KEY yoki BOT_TOKEN topilmadi")
+TELEGRAMTOKEN = os.environ.get("TELEGRAMTOKEN")
+GROQAPIKEY = os.environ.get("GROQAPIKEY")
+WEBHOOKURL = os.environ.get("WEBHOOKURL")
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN topilmadi")
+if not GROQAPIKEY:
+    raise ValueError("GROQAPIKEY topilmadi")
+if not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL topilmadi")
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
+client = Groq(apikey=GROQAPI_KEY)
+app = Flask(_name_)
+DB_NAME = "memory.db"
 
-def start_health_server() -> None:
-    port = int(os.getenv("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    server.serve_forever()
+SYSTEM_PROMPT = """
+Sen Telegram guruhida ishlaydigan o‘zbekcha aqlli botsan.
+Doim faqat o‘zbek tilida javob ber.
+Javoblaring tabiiy, samimiy, qisqa va foydali bo‘lsin.
+Odamga o‘xshab yoz.
+Suhbat kontekstini eslab qol.
+Agar foydalanuvchi savol bersa aniq javob ber.
+Agar foydalanuvchi oddiy gap yozsa samimiy suhbat qur.
+"""
 
-async def ask_groq(
-    messages: list[dict], model: str = "llama3-70b-8192", temperature: float = 0.6
-) -> str:
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages, "temperature": temperature}
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90)) as s:
-        async with s.post(url, headers=headers, json=payload) as r:
-            r.raise_for_status()
-            data = await r.json()
-            return data["choices"][0]["message"]["content"]
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            user_id INTEGER,
+            username TEXT,
+            role TEXT,
+            content TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-history: dict[int, list] = {}
+def savemessage(chatid, user_id, username, role, content):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO messages (chatid, userid, username, role, content) VALUES (?, ?, ?, ?, ?)",
+        (chatid, userid, username, role, content)
+    )
+    conn.commit()
+    conn.close()
 
-async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def getmemory(chatid, limit=20):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT role, content FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+        (chat_id, limit)
+    )
+    rows = cur.fetchall()
+    conn.close()
+    rows.reverse()
+    return [{"role": role, "content": content} for role, content in rows]
+
+async def handlemessage(update: Update, context: ContextTypes.DEFAULTTYPE):
     if not update.message or not update.message.text:
         return
-    cid = update.effective_chat.id
-    text = update.message.text
 
-    if cid not in history:
-        history[cid] = [
-            {
-                "role": "system",
-                "content": (
-                    "Sizning ismingiz Muxiddin AI. Siz faqat o‘zbek tilida, "
-                    "xushmuomala va aniq javob berasiz."
-                ),
-            }
-        ]
+    message = update.message
+    text = message.text.strip()
+    chatid = message.chatid
+    user = message.from_user
+    botusername = (await context.bot.getme()).username
 
-    history[cid].append({"role": "user", "content": text})
-    history[cid] = history[cid][-12:]
+    is_group = message.chat.type in ["group", "supergroup"]
+    should_reply = True
+
+    if is_group:
+        should_reply = False
+
+        if message.replytomessage and message.replytomessage.from_user:
+            if message.replytomessage.fromuser.username == botusername:
+                should_reply = True
+
+        if f"@{bot_username}" in text:
+            should_reply = True
+
+    if not should_reply:
+        return
+
+    cleantext = text.replace(f"@{botusername}", "").strip()
+
+    save_message(
+        chatid=chatid,
+        user_id=user.id,
+        username=user.username or user.first_name or "user",
+        role="user",
+        content=clean_text
+    )
+
+    memory = getmemory(chatid, limit=20)
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + memory
 
     try:
-        reply = await ask_groq(history[cid])
-    except Exception:
-        reply = await ask_groq(
-            [
-                {"role": "system", "content": "Faqat o‘zbek tilida javob ber."},
-                {"role": "user", "content": text},
-            ],
-            model="llama3-8b-8192",
+        completion = client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
+            messages=messages,
+            temperature=0.8,
+            max_tokens=500
         )
+        reply = completion.choices[0].message.content.strip()
+    except Exception as e:
+        reply = f"Xatolik: {str(e)}"
 
-    history[cid].append({"role": "assistant", "content": reply})
-    await update.message.reply_text(reply)
-
-async def main() -> None:
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .build()
+    save_message(
+        chatid=chatid,
+        user_id=0,
+        username="bot",
+        role="assistant",
+        content=reply
     )
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-    await app.initialize()
-    await app.start()
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.run_polling()
 
-if __name__ == "__main__":
-    threading.Thread(target=start_health_server, daemon=True).start()
-    asyncio.run(main())
+    await message.reply_text(reply)
+
+telegramapp = Application.builder().token(TELEGRAMTOKEN).build()
+telegramapp.addhandler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot ishlayapti"  @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.dejson(request.getjson(force=True), telegram_app.bot)
+    telegramapp.updatequeue.put_nowait(update)
+    return "ok"
+
+async def startup():
+    init_db()
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegramapp.bot.setwebhook(url=f"{WEBHOOKURL}/{TELEGRAMTOKEN}")
+
+if _name_ == "_main_":
+    loop = asyncio.geteventloop()
+    loop.rununtilcomplete(startup())
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+```

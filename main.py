@@ -1,48 +1,51 @@
 import os
-from flask import Flask, request
 import telebot
 from groq import Groq
 
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-bot = telebot.TeleBot(BOT_TOKEN)
-client = Groq(api_key=GROQ_API_KEY)
-app = Flask(__name__)
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
-@app.route("/", methods=["GET"])
-def home():
-    return "Bot is running!", 200
+user_context = {}
 
-@app.route("/", methods=["POST"])
-def webhook():
-    json_str = request.get_data().decode("UTF-8")
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return "ok", 200
+def get_groq_response(user_id, user_name, text):
+    if user_id not in user_context:
+        user_context[user_id] = [
+            {"role": "system", "content": f"Sen Telegram guruhdagi do'stona va aqlli yordamchisan. Foydalanuvchining ismi: {user_name}. Faqat O'zbek tilida yoz. Suhbatdoshni tanib, uning oldingi gaplarini eslab qol."}
+        ]
+    
+    user_context[user_id].append({"role": "user", "content": text})
 
-@bot.message_handler(commands=["start"])
-def start_message(message):
-    bot.reply_to(message, "Salom! Bot ishlayapti.")
+    if len(user_context[user_id]) > 11:
+        user_context[user_id] = [user_context[user_id][0]] + user_context[user_id][-10:]
 
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
     try:
-        response = client.chat.completions.create(
-            model="gemma2-9b-it",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": message.text}
-            ]
+        completion = groq_client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=user_context[user_id],
+            temperature=0.7,
+            max_tokens=500
         )
-        answer = response.choices[0].message.content
-        bot.reply_to(message, answer)
+        
+        bot_reply = completion.choices[0].message.content
+        user_context[user_id].append({"role": "assistant", "content": bot_reply})
+        
+        return bot_reply
     except Exception as e:
-        bot.reply_to(message, f"Xatolik: {str(e)}")
+        print(f"Groq xatosi: {e}")
+        return "Kechirasiz, hozir biroz bandman. Keyinroq yana yozib ko'ring!"
+
+@bot.message_handler(content_types=['text'])
+def handle_messages(message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name
+    text = message.text
+
+    bot.send_chat_action(message.chat.id, 'typing')
+    reply_text = get_groq_response(user_id, user_name, text)
+    bot.reply_to(message, reply_text)
 
 if __name__ == "__main__":
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
